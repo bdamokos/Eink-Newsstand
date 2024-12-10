@@ -7,10 +7,10 @@ If you want to add remove or change the list of sources this csv file will be wh
 **(Until you do this the code will NOT work)**
 
 Next, a few file paths must be set:
-Line 14 font_pathH (font of headline)
-Line 15 font_pathB (font of byline)
-Line 26 file_path (file path of rss_list_final.csv, aka your list of new sources)
-Line 23 max_headline_num (used to say how many headlines you want from each source to be pulled)
+1. Line 14 font_pathH (font of headline)
+2. Line 15 font_pathB (font of byline)
+3. Line 26 file_path (file path of rss_list_final.csv, aka your list of new sources)
+4. Line 23 max_headline_num (used to say how many headlines you want from each source to be pulled)
 
 The Cycle:
   The order of headliens is made by a matrix where it will show the first article from every news source in the csv until all are shown. Then it will move on to the second article and so on
