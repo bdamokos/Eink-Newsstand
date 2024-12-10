@@ -1,0 +1,278 @@
+from waveshare_epd import epd4in2_V2, TextWrapper, ImageConverter
+from PIL import Image, ImageDraw, ImageFont
+import time, threading, feedparser, qrcode
+import RPi.GPIO as GPIO
+from datetime import datetime
+
+GPIO.cleanup()  # Reset GPIO settings
+# Initialize the e-ink display
+epd = epd4in2_V2.EPD()
+epd.init()
+epd.Clear()
+
+# Headline Font Settings
+font_pathH = '/home/jared/eink_folder/timesnewromanbold.ttf'
+font_pathB = '/home/jared/eink_folder/Font.ttc'
+font_sizeH = 30
+font_sizeB = 14
+xH = 5
+yH = 110
+max_width = 395
+
+wait_time = 30
+max_headline_num = 4  # since we start at 0 this should be +1 of what you actually want (ex. 4 gives 3)
+
+# RSS FEED Set up
+file_path = '/home/jared/eink_folder/rss_list_final.csv'
+headline_num = 0
+source_num = 0
+showing_link = True
+text_wrapperH = TextWrapper(font_pathH, font_sizeH, max_width)  # headline
+text_wrapperB = TextWrapper(font_pathB, font_sizeB, max_width)  # byline
+text_wrapperH2 = TextWrapper(font_pathH, 27, 245)  # headline during link_screen
+
+# Shared variables and synchronization
+count = 0
+count_event = threading.Event()
+paused = threading.Event()
+
+def news_printer(file_path, source_num, headline_num):
+    global canvas, byline_end, headline, source
+    canvas = Image.new('1', (epd.width, epd.height), 255)  # White background
+    image_converter = ImageConverter(contrast=5)
+    with open(file_path, 'r') as file:
+        data = [line.split(',') for line in file.read().splitlines()]
+    
+    # Validate source_num
+    if source_num >= len(data):
+        print(f'Invalid source_num: {source_num} (max is {len(data) - 1})')
+        return  # Early return on invalid source_num
+
+    value = data[source_num][1]
+    image_path = data[source_num][2]
+    logo = image_converter.convert(image_path, 100)  # last number is image scale size
+    canvas.paste(logo, (0, 0))  # Adjust position as needed
+    source = feedparser.parse(value)
+
+    if len(source.entries) <= headline_num:
+        print(f'Invalid headline_num: {headline_num} (max is {len(source.entries) - 1})')
+        print(len(source.entries))
+        return  # Early return on invalid headline_num
+    
+    headline = source.entries[headline_num].title
+    text_wrapperH.draw_text(canvas, headline, xH, yH)
+    headline_end = text_wrapperH.draw_text(canvas, headline, xH, yH)
+    byline = source.entries[headline_num].description
+    text_wrapperB.draw_text(canvas, byline, xH, headline_end + 20)
+    byline_end = text_wrapperB.draw_text(canvas, byline, xH, headline_end + 20)
+
+def count_csv_rows(file_path):
+    with open(file_path, 'r') as file:
+        row_count = sum(1 for row in file)
+        row_count -= 1  # Adjust for header if necessary
+    print(f'Total sources: {row_count}')  # Print the number of sources
+    return row_count
+
+def loop_news_printer(file_path):
+    global max_source_num, max_headline_num, headline_num, source_num, matrix, current_index, one_spot_forward_index, one_spot_back_index, one_spot_back_element, one_spot_forward_element
+    max_source_num = count_csv_rows(file_path)
+    # Initialize a flat matrix
+    matrix = [(s, h) for h in range(max_headline_num + 1) for s in range(max_source_num)]
+    # Calculate the current index in the flat matrix
+    current_index = headline_num * (max_source_num + 1) + source_num
+    print(matrix)
+    while True:
+        try:
+            # Initialize a flat matrix
+            matrix = [(s, h) for h in range(max_headline_num + 1) for s in range(max_source_num)]
+            # Calculate the index for the element one spot over and wrap around using modulo
+            one_spot_forward_index = (current_index + 1) % len(matrix)
+            # Access the wrapped element
+            one_spot_forward_element = matrix[one_spot_forward_index]
+            current_index = one_spot_forward_index
+            news_printer(file_path, source_num, headline_num)
+            epd.display_Partial(epd.getbuffer(canvas))
+            print(f'({source_num},{headline_num})')
+            source_num = min(one_spot_forward_element[0], max_source_num - 1)  # Ensure within bounds
+            headline_num = one_spot_forward_element[1]  # Update headline_num
+            count_event.wait()  # Wait until the count reaches 10
+            count_event.clear()  # Reset the event for the next cycle
+        except Exception as e:
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            epd.init()
+            epd.Clear()
+            error_screen = Image.new('1', (epd.width, epd.height), 255)  # White background
+            text_wrapperH.draw_text(error_screen, f"Broke Down At:{current_time}", xH, yH)
+            epd.display_Partial(epd.getbuffer(error_screen))
+            paused.clear()
+            GPIO.output(7, GPIO.LOW)  # Ensure the LED is off
+            GPIO.cleanup()  # Reset GPIO settings
+            print(f"Error occurred at {current_time}: {e}")
+
+def counting_function():
+    global count
+    while True:
+        time.sleep(1)
+        paused.wait()  # This will block if paused is not set
+        if count < wait_time:
+            count += 1
+        if count >= wait_time:
+            count_event.set()  # Signal that the count has reached 10
+            count = 0  # Reset count for the next cycle
+            print("Count Reset to Zero")
+
+def setup_gpio():
+    GPIO.setmode(GPIO.BCM)
+    
+    GPIO.setup(26, GPIO.IN, pull_up_down=GPIO.PUD_UP)  # Pause button
+    GPIO.add_event_detect(26, GPIO.FALLING, callback=button_pause, bouncetime=100)
+    
+    GPIO.setup(23, GPIO.IN, pull_up_down=GPIO.PUD_UP)  # Clear button
+    GPIO.add_event_detect(23, GPIO.FALLING, callback=button_clear, bouncetime=200)
+    
+    GPIO.setup(6, GPIO.IN, pull_up_down=GPIO.PUD_UP)   # Link button
+    GPIO.add_event_detect(6, GPIO.FALLING, callback=button_link, bouncetime=200)
+    
+    GPIO.setup(5, GPIO.IN, pull_up_down=GPIO.PUD_UP)  # Back button
+    GPIO.add_event_detect(5, GPIO.FALLING, callback=button_back, bouncetime=150)
+    
+    GPIO.setup(21, GPIO.IN, pull_up_down=GPIO.PUD_UP)   # Next button
+    GPIO.add_event_detect(21, GPIO.FALLING, callback=button_next, bouncetime=150)
+
+def button_back(channel):
+    global count, current_index, source_num, headline_num
+    count = 0
+    if paused.is_set():
+        text_wrapperB.draw_text(canvas, "Loading Previous...", 130, 98)
+        epd.display_Partial(epd.getbuffer(canvas))
+        one_spot_back_index = (current_index - 2) % len(matrix)
+        one_spot_back_element = matrix[one_spot_back_index]
+        current_index = one_spot_back_index
+        source_num = min(one_spot_back_element[0], max_source_num - 1)  # Ensure within bounds
+        headline_num = one_spot_back_element[1]  # Update headline_num
+        count_event.set()
+    else:
+        one_spot_back_index = (current_index - 2) % len(matrix)
+        one_spot_back_element = matrix[one_spot_back_index]
+        current_index = one_spot_back_index
+        source_num = min(one_spot_back_element[0], max_source_num - 1)  # Ensure within bounds
+        headline_num = one_spot_back_element[1]  # Update headline_num
+        current_index = (one_spot_back_index + 1) % len(matrix)
+        news_printer(file_path, source_num, headline_num)
+        pause_screen = canvas.copy()
+        text_wrapperB.draw_text(pause_screen, "Paused", 170, 98)
+        epd.display_Partial(epd.getbuffer(pause_screen))
+        print(f'({source_num},{headline_num})')
+        
+def button_next(channel):
+    global count, one_spot_forward_index, one_spot_forward_element, current_index, source_num, headline_num
+    count = 0
+    if not paused.is_set():
+        text_wrapperB.draw_text(canvas, "Loading Next...", 130, 98)
+        epd.display_Partial(epd.getbuffer(canvas))
+        one_spot_forward_element = matrix[current_index]
+        source_num = min(one_spot_forward_element[0], max_source_num - 1)  # Ensure within bounds
+        headline_num = one_spot_forward_element[1]  # Update headline_num
+        # Calculate the index for the element one spot over and wrap around using modulo
+        one_spot_forward_index = (current_index + 1) % len(matrix)
+        # Access the wrapped element
+        one_spot_forward_element = matrix[one_spot_forward_index]
+        current_index = one_spot_forward_index
+        news_printer(file_path, source_num, headline_num)
+        pause_screen = canvas.copy()
+        text_wrapperB.draw_text(pause_screen, "Paused", 170, 98)
+        epd.display_Partial(epd.getbuffer(pause_screen))
+        print(f'({source_num},{headline_num})')
+    else:
+        count_event.set() # Signal that the count has reached 10
+
+def button_pause(channel):
+    global paused
+    paused_state = "Paused" if paused.is_set() else "Resumed"
+    if paused.is_set():
+        paused.clear()
+        print(f'Paused at {count}')
+        pause_screen = canvas.copy()
+        text_wrapperB.draw_text(pause_screen, "Paused", 170, 98)
+        epd.display_Partial(epd.getbuffer(pause_screen))
+    else:
+        paused.set()
+        print(f'Resumed at {count}')
+        epd.display_Partial(epd.getbuffer(canvas))
+
+def button_clear(channel):
+    print('Clear button pressed')
+    if paused.is_set():
+        paused.clear()
+        epd.init()
+        epd.Clear()
+        epd.display_Partial(epd.getbuffer(canvas))
+        paused.set()
+    else:
+        epd.init()
+        epd.Clear()
+        pause_screen = canvas.copy()
+        text_wrapperB.draw_text(pause_screen, "Paused", 170, 98)
+        epd.display_Partial(epd.getbuffer(pause_screen))
+
+def button_link(channel):
+    global showing_link
+    showing_link = not showing_link
+    print(showing_link)
+    if showing_link:
+        epd.display_Partial(epd.getbuffer(canvas))
+        paused.set()
+    if not showing_link:
+        if paused.is_set():
+            paused.clear()
+        link_screen = canvas.copy()
+        draw = ImageDraw.Draw(link_screen)
+        draw.rectangle([0, 110, 400, 300], outline="white", fill="white")
+        text_wrapperB.draw_text(link_screen, "Paused", 170, 98)
+        link = source.entries[headline_num].link
+        data = link
+        qr = qrcode.QRCode(
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(data)
+        qr.make(fit=True)
+        # Define fixed size for QR code
+        fixed_width, fixed_height = 150, 150  # Set the desired dimensions
+        # Create the QR code image and resize it to fixed dimensions
+        qr_img = qr.make_image(fill='black', back_color='white').convert('1')
+        qr_img_resized = qr_img.resize(
+            (fixed_width, fixed_height),
+            Image.NEAREST
+        )
+        link_screen.paste(qr_img_resized, (245, 110))
+        headline = source.entries[headline_num].title
+        text_wrapperH2.draw_text(link_screen, headline, xH, 120)
+        epd.display_Partial(epd.getbuffer(link_screen))
+
+try:
+    setup_gpio()
+    paused.set()  # Initially, the loop is not paused
+    # Start the counting function in a new thread
+    counting_thread = threading.Thread(target=counting_function)
+    counting_thread.daemon = True  # Allow thread to exit when the main program exits
+    counting_thread.start()
+
+    # Call the function to start the news printer loop in the main thread
+    loop_news_printer(file_path)
+    current_time = datetime.now()
+    print(current_time.strftime("%H:%M:%S"))
+
+except Exception as e:
+    epd.Clear()  # Clear the display
+    GPIO.output(7, GPIO.LOW)  # Ensure the LED is off
+    current_time = datetime.now()
+    print(current_time.strftime("%H:%M:%S"))
+    print(f"An error occurred: {e}")
+finally:
+    epd.Clear()
+    GPIO.output(7, GPIO.LOW)  # Ensure the LED is off
+    current_time = datetime.now()
+    print(current_time.strftime("%H:%M:%S"))
+    GPIO.cleanup()  # Reset GPIO settings
