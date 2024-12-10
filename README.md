@@ -5,6 +5,7 @@ This code uses RSS feeds to pull news articles, it gets the rss feed, the name o
 If you want to add remove or change the list of sources this csv file will be where it is done
 
 **(Until you do this the code will NOT work)**
+
 Next, a few file paths must be set:
 Line 14 font_pathH (font of headline)
 Line 15 font_pathB (font of byline)
