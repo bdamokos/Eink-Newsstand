@@ -11,8 +11,8 @@ epd.init()
 epd.Clear()
 
 # Headline Font Settings
-font_pathH = '/home/jared/eink_folder/timesnewromanbold.ttf'
-font_pathB = '/home/jared/eink_folder/Font.ttc'
+font_pathH = '' #in quotes
+font_pathB = '' #in quotes
 font_sizeH = 30
 font_sizeB = 14
 xH = 5
@@ -23,7 +23,7 @@ wait_time = 30
 max_headline_num = 4  # since we start at 0 this should be +1 of what you actually want (ex. 4 gives 3)
 
 # RSS FEED Set up
-file_path = '/home/jared/eink_folder/rss_list_final.csv'
+file_path = '' #in quotes
 headline_num = 0
 source_num = 0
 showing_link = True
