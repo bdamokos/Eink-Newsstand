@@ -4,12 +4,12 @@ but I have tried my best to lable every thing that must been done before you can
 This code uses RSS feeds to pull news articles, it gets the rss feed, the name of the news source, and the image logo by pulling it from a csv file named rss_list_final.
 If you want to add remove or change the list of sources this csv file will be where it is done
 
-**(Until you do this the code will NOT work)
+**(Until you do this the code will NOT work)**
 Next, a few file paths must be set:
 Line 14 font_pathH (font of headline)
 Line 15 font_pathB (font of byline)
 Line 26 file_path (file path of rss_list_final.csv, aka your list of new sources)
-Line 23 max_headline_num (used to say how many headlines you want from each source to be pulled)**
+Line 23 max_headline_num (used to say how many headlines you want from each source to be pulled)
 
 The Cycle:
   The order of headliens is made by a matrix where it will show the first article from every news source in the csv until all are shown. Then it will move on to the second article and so on
